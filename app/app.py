@@ -6,6 +6,7 @@ import os
 import pymongo
 from bson import ObjectId, json_util
 import json
+import requests
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -15,6 +16,25 @@ CORS(app)
 
 client = pymongo.MongoClient(os.getenv('MONGO_URI'))
 db = client[os.getenv('DATABASE_NAME')]
+
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+def notify_user(user_id, status, order_id):
+    message = f"🍴 Your order is *{status}*"
+    
+    # Send message
+    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
+        "chat_id": user_id,
+        "text": message,
+        "parse_mode": "Markdown"
+    })
+
+    # If served → send final message
+    if status == "Served":
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
+            "chat_id": user_id,
+            "text": "✅ Your order is complete! Type 'hi' to start a new order."
+        })
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -34,32 +54,50 @@ def login():
     
 def serialize_order(order):
     return {
-        "id": str(order["_id"]["$oid"]),
-        "studentName": order.get("student"),
+        "id": str(order["_id"]["$oid"]) if isinstance(order["_id"], dict) and "$oid" in order["_id"] else str(order["_id"]),
+        "orderId": order.get("orderId"),
+        "studentName": order.get("studentName"),
         "items": order.get("items", []),
-        "status": order.get("status", "Order Received"),
-        "createdAt": order.get("createdAt")
+        "status": order.get("status", "Received"),
+        "createdAt": order.get("createdAt"),
+        "totalCost": order.get("totalCost", 0)
     }
  
 # Get all orders
 @app.route("/orders", methods=["GET"])
 def get_orders():
-    orders = json.loads(json_util.dumps(db['Orders'].find()))
+    # Sort orders by createdAt descending (most recent first)
+    orders = json.loads(json_util.dumps(db['Orders'].find().sort("createdAt", -1)))
     return jsonify([serialize_order(o) for o in orders])
+
+@app.route("/order", methods=["GET"])
+def get_order():
+    # Sort orders by createdAt descending (most recent first)
+    orders = json.loads(json_util.dumps(db['Orders'].find_one({"orderId":request.args.get("order_id")})))
+    return orders
  
 # Add a new order (student placing order)
+import random
 @app.route("/orders", methods=["POST"])
 def add_order():
     data = request.json
+    # Generate unique orderId in format Order_**********
+    while True:
+        random_digits = ''.join([str(random.randint(0, 9)) for _ in range(10)])
+        order_id = f"Order_{random_digits}"
+        if db['Orders'].count_documents({"orderId": order_id}) == 0:
+            break
     order = {
-        "studentName": data.get("studentName"),
+        "orderId": order_id,
+        "studentName": data.get("user_id"),
         "items": data.get("items", []),
-        "status": "Order Received",
-        "createdAt": data.get("createdAt")
+        "status": "Received",
+        "createdAt": datetime.now(),
+        "totalCost": data.get("total", 0)
     }
     result = db['Orders'].insert_one(order)
     order["_id"] = result.inserted_id
-    return jsonify(serialize_order(order)), 201
+    return jsonify(serialize_order(order)), 200
  
 # Update order status
 @app.route("/orders/<order_id>", methods=["PUT"])
@@ -70,14 +108,17 @@ def update_order_status(order_id):
         {"_id": ObjectId(order_id)},
         {"$set": {"status": new_status}}
     )
+    print(data)
+    notify_user(data.get("user_id"),new_status,data.get("order_id"))
     if result.modified_count == 0:
         return jsonify({"error": "Order not found"}), 404
     return jsonify({"id": order_id, "status": new_status})
 
 def serialize_item(item):
     return {
-        "_id": item["_id"],
+        "_id": item["_id"]["$oid"] if isinstance(item["_id"], dict) and "$oid" in item["_id"] else str(item["_id"]),
         "name": item.get("name"),
+        "category": item.get("category"),
         "price": item.get("price"),
         "stock": item.get("stock", 0),
         "available": item.get("available", True)
@@ -89,12 +130,18 @@ def get_items():
     items = json.loads(json_util.dumps(db['Menu'].find()))
     return jsonify([serialize_item(i) for i in items])
  
+@app.route("/item", methods=["GET"])
+def get_item():
+    items = json.loads(json_util.dumps(db['Menu'].find_one({"_id": ObjectId(request.args.get("item_id"))})))
+    return jsonify(items)
+
 # Add a new item
 @app.route("/items", methods=["POST"])
 def add_item():
     data = request.json
     item = {
         "name": data.get("name"),
+        "category": data.get("category"),
         "price": data.get("price"),
         "stock": data.get("stock", 0),
         "available": True
@@ -112,6 +159,7 @@ def update_item():
         update_fields = {}
         if "_id" in data:item_id = data["_id"]["$oid"]
         if "name" in data: update_fields["name"] = data["name"]
+        if "category" in data: update_fields["category"] = data["category"]
         if "price" in data: update_fields["price"] = data["price"]
         if "stock" in data: update_fields["stock"] = data["stock"]
         if "available" in data: update_fields["available"] = data["available"]
@@ -137,7 +185,19 @@ def delete_item(item_id):
     if result.deleted_count == 0:
         return jsonify({"error": "Item not found"}), 404
     return jsonify({"message": "Item deleted"})
-    
+
+@app.route('/categories', methods=['GET'])
+def get_categories():
+    categories = json.loads(json_util.dumps(db['Category'].find()))
+    return jsonify(categories)
+
+@app.route('/itemsperCat', methods=['GET'])
+def get_items_per_category():
+    category = request.args.get('category')
+    if not category:
+        return jsonify({"error": "Category parameter is required"}), 400
+    items = json.loads(json_util.dumps(db['Menu'].find({"category": category})))
+    return jsonify([serialize_item(i) for i in items])
 
 if __name__=='__main__':
    app.run( port=5000,debug=True)
