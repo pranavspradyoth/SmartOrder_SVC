@@ -87,16 +87,64 @@ def add_order():
         order_id = f"Order_{random_digits}"
         if db['Orders'].count_documents({"orderId": order_id}) == 0:
             break
+    # allow incoming status (e.g., Confirmed) but default to Received
+    incoming_status ="Received"
     order = {
         "orderId": order_id,
         "studentName": data.get("user_id"),
         "items": data.get("items", []),
-        "status": "Received",
+        "status": incoming_status,
         "createdAt": datetime.now(),
         "totalCost": data.get("total", 0)
     }
     result = db['Orders'].insert_one(order)
     order["_id"] = result.inserted_id
+    # If order is already Confirmed on creation, decrement menu stock immediately
+    try:
+        items = order.get("items", [])
+        for it in items:
+            item_oid = None
+            if isinstance(it, dict):
+                if "item_id" in it:
+                    raw = it["item_id"]
+                    if isinstance(raw, dict) and "$oid" in raw:
+                        item_oid = raw["$oid"]
+                    else:
+                        item_oid = raw
+            qty = 1
+            if isinstance(it, dict):
+                qty = int(it.get("quantity") or it.get("qty") or it.get("count") or 1)
+
+            if not item_oid:
+                continue
+            try:
+                menu_obj_id = ObjectId(item_oid)
+            except Exception:
+                continue
+
+            menu_item = db['Menu'].find_one({"_id": menu_obj_id})
+            if not menu_item:
+                continue
+
+            raw_stock = menu_item.get("stock", 0)
+            try:
+                stock_int = int(raw_stock)
+            except Exception:
+                stock_int = 0
+
+            new_stock = max(0, stock_int - qty)
+            if isinstance(raw_stock, str):
+                update_value = str(new_stock)
+            else:
+                update_value = new_stock
+
+            update_fields = {"stock": update_value}
+            if new_stock == 0:
+                update_fields["available"] = False
+
+            db['Menu'].update_one({"_id": menu_obj_id}, {"$set": update_fields})
+    except Exception as e:
+        print("Error while decrementing stock on order create:", e)
     return jsonify(serialize_order(order)), 200
  
 # Update order status
@@ -157,7 +205,7 @@ def update_item():
     try:
         data = request.json
         update_fields = {}
-        if "_id" in data:item_id = data["_id"]["$oid"]
+        if "_id" in data:item_id = data["_id"]
         if "name" in data: update_fields["name"] = data["name"]
         if "category" in data: update_fields["category"] = data["category"]
         if "price" in data: update_fields["price"] = data["price"]
@@ -196,7 +244,7 @@ def get_items_per_category():
     category = request.args.get('category')
     if not category:
         return jsonify({"error": "Category parameter is required"}), 400
-    items = json.loads(json_util.dumps(db['Menu'].find({"category": category})))
+    items = json.loads(json_util.dumps(db['Menu'].find({"category": category, "stock": {"$ne": "0"}})))
     return jsonify([serialize_item(i) for i in items])
 
 if __name__=='__main__':
