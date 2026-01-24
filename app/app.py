@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import jwt
 from datetime import datetime, timedelta
@@ -7,17 +7,24 @@ import pymongo
 from bson import ObjectId, json_util
 import json
 import requests
+import sys
 from dotenv import load_dotenv
 load_dotenv()
 
-app = Flask(__name__)
-app.secret_key = os.getenv('SECRET_KEY')
+curr_path = os.getcwd()
+print("CURRENT_PATH:", curr_path)
+ANGULAR_DIST = os.path.join(curr_path, "angular_dist")
+
+print("ANGULAR_DIST:", ANGULAR_DIST)
+print("FILES:", os.listdir(ANGULAR_DIST) if os.path.exists(ANGULAR_DIST) else "NOT FOUND")
+app = Flask(__name__,  static_folder=ANGULAR_DIST)
+app.secret_key = "snnnnnnnnnuiwuchuhcuihcueechceueccueiuic"
 CORS(app)
 
-client = pymongo.MongoClient(os.getenv('MONGO_URI'))
-db = client[os.getenv('DATABASE_NAME')]
+client = pymongo.MongoClient("mongodb+srv://pranavspradyoth_db_user:UMqfOuwbLSUtO7dG@cluster0.dpri3mn.mongodb.net/")
+db = client["SmartOrder"]
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+BOT_TOKEN = "8122452170:AAEmIGmBfx2zSIlnwEtJXbm_aWOkJx5NQvU"
 
 def notify_user(user_id, status, order_id):
     message = f"🍴 Your order is *{status}*"
@@ -36,7 +43,31 @@ def notify_user(user_id, status, order_id):
             "text": "✅ Your order is complete! Type 'hi' to start a new order."
         })
 
-@app.route('/login', methods=['POST'])
+@app.route("/")
+def serve_root():
+    return send_from_directory(app.static_folder, "index.html")
+
+
+@app.route("/<path:path>")
+def serve_spa(path):
+    # API routes should 404 here (real APIs are defined above)
+    if path.startswith("api"):
+        return jsonify({"error": "Not Found"}), 404
+
+    # Serve static files if they exist
+    file_path = os.path.join(app.static_folder, path)
+    if os.path.exists(file_path):
+        return send_from_directory(app.static_folder, path)
+
+    # Otherwise serve Angular app
+    return send_from_directory(app.static_folder, "index.html")
+
+
+@app.route("/health")
+def health():
+    return {"status": "ok"}
+
+@app.route('/api/login', methods=['POST'])
 def login():
     data = request.json
     username = data.get('username')
@@ -64,13 +95,13 @@ def serialize_order(order):
     }
  
 # Get all orders
-@app.route("/orders", methods=["GET"])
+@app.route("/api/orders", methods=["GET"])
 def get_orders():
     # Sort orders by createdAt descending (most recent first)
     orders = json.loads(json_util.dumps(db['Orders'].find().sort("createdAt", -1)))
     return jsonify([serialize_order(o) for o in orders])
 
-@app.route("/order", methods=["GET"])
+@app.route("/api/order", methods=["GET"])
 def get_order():
     # Sort orders by createdAt descending (most recent first)
     orders = json.loads(json_util.dumps(db['Orders'].find_one({"orderId":request.args.get("order_id")})))
@@ -78,7 +109,7 @@ def get_order():
  
 # Add a new order (student placing order)
 import random
-@app.route("/orders", methods=["POST"])
+@app.route("/api/orders", methods=["POST"])
 def add_order():
     data = request.json
     # Generate unique orderId in format Order_**********
@@ -148,7 +179,7 @@ def add_order():
     return jsonify(serialize_order(order)), 200
  
 # Update order status
-@app.route("/orders/<order_id>", methods=["PUT"])
+@app.route("/api/orders/<order_id>", methods=["PUT"])
 def update_order_status(order_id):
     data = request.json
     new_status = data.get("status")
@@ -173,18 +204,18 @@ def serialize_item(item):
     }
  
 # Get all items
-@app.route("/items", methods=["GET"])
+@app.route("/api/items", methods=["GET"])
 def get_items():
     items = json.loads(json_util.dumps(db['Menu'].find()))
     return jsonify([serialize_item(i) for i in items])
- 
-@app.route("/item", methods=["GET"])
+
+@app.route("/api/item", methods=["GET"])
 def get_item():
     items = json.loads(json_util.dumps(db['Menu'].find_one({"_id": ObjectId(request.args.get("item_id"))})))
     return jsonify(items)
 
 # Add a new item
-@app.route("/items", methods=["POST"])
+@app.route("/api/items", methods=["POST"])
 def add_item():
     data = request.json
     item = {
@@ -200,7 +231,7 @@ def add_item():
     return jsonify({"message": "Item Added Successfully"}), 201
 
 # Update item details (price, stock, availability)
-@app.route("/items", methods=["PUT"])
+@app.route("/api/items", methods=["PUT"])
 def update_item():
     try:
         data = request.json
@@ -227,19 +258,19 @@ def update_item():
         return jsonify({"error": str(e)}), 500
  
 # Delete an item
-@app.route("/items/<item_id>", methods=["DELETE"])
+@app.route("/api/items/<item_id>", methods=["DELETE"])
 def delete_item(item_id):
     result = db['Menu'].delete_one({"_id": ObjectId(item_id)})
     if result.deleted_count == 0:
         return jsonify({"error": "Item not found"}), 404
     return jsonify({"message": "Item deleted"})
 
-@app.route('/categories', methods=['GET'])
+@app.route('/api/categories', methods=['GET'])
 def get_categories():
     categories = json.loads(json_util.dumps(db['Category'].find()))
     return jsonify(categories)
 
-@app.route('/itemsperCat', methods=['GET'])
+@app.route('/api/itemsperCat', methods=['GET'])
 def get_items_per_category():
     category = request.args.get('category')
     if not category:
@@ -248,4 +279,4 @@ def get_items_per_category():
     return jsonify([serialize_item(i) for i in items])
 
 if __name__=='__main__':
-   app.run( port=5000,debug=True)
+   app.run(port=5000,debug=True)
