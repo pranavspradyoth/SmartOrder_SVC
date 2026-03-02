@@ -273,4 +273,4 @@ def get_items_per_category():
     return jsonify([serialize_item(i) for i in items])
 
 if __name__=='__main__':
-   app.run(port=5000,debug=True)
+   app.run()
