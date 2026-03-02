@@ -11,13 +11,7 @@ import sys
 from dotenv import load_dotenv
 load_dotenv()
 
-curr_path = os.getcwd()
-print("CURRENT_PATH:", curr_path)
-ANGULAR_DIST = os.path.join(curr_path, "angular_dist")
-
-print("ANGULAR_DIST:", ANGULAR_DIST)
-print("FILES:", os.listdir(ANGULAR_DIST) if os.path.exists(ANGULAR_DIST) else "NOT FOUND")
-app = Flask(__name__,  static_folder=ANGULAR_DIST)
+app = Flask(__name__)
 app.secret_key = "snnnnnnnnnuiwuchuhcuihcueechceueccueiuic"
 CORS(app)
 
