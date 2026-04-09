@@ -37,24 +37,6 @@ def notify_user(user_id, status, order_id):
             "text": "✅ Your order is complete! Type 'hi' to start a new order."
         })
 
-@app.route("/")
-def serve_root():
-    return send_from_directory(app.static_folder, "index.html")
-
-
-@app.route("/<path:path>")
-def serve_spa(path):
-    # API routes should 404 here (real APIs are defined above)
-    if path.startswith("api"):
-        return jsonify({"error": "Not Found"}), 404
-
-    # Serve static files if they exist
-    file_path = os.path.join(app.static_folder, path)
-    if os.path.exists(file_path):
-        return send_from_directory(app.static_folder, path)
-
-    # Otherwise serve Angular app
-    return send_from_directory(app.static_folder, "index.html")
 
 
 @app.route("/health")
